@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f2f2f2;
+        }
+        #videos-container {
+            display: flex;
+            justify-content: space-around;
+            width: 80%;
+        }
+        video {
+            width: 45%;
+            max-width: 400px;
+            background-color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div id="videos-container">
+        <video id="localVideo" autoplay muted></video>
+        <video id="remoteVideo" autoplay></video>
+    </div>
+
+    <button onclick="createRoom()">Create Room</button>
+    <button onclick="joinRoom()">Join Room</button>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        let localStream;
+        let peerConnection;
+        let roomId;
+
+        // Function to create a new room
+        function createRoom() {
+            socket.emit('createRoom');
+        }
+
+        // Function to join an existing room
+        function joinRoom() {
+            roomId = prompt('Enter room ID:');
+            if (roomId && roomId.trim() !== '') {
+                socket.emit('joinRoom', roomId);
+            } else {
+                console.error('Invalid room ID');
+            }
+        }
+
+        // Function to start the video call
+        async function startCall() {
+            try {
+                // Get local media stream (camera and microphone)
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+                // Display local video stream in the local video element
+                localVideo.srcObject = localStream;
+
+                // Create a new peer connection
+                peerConnection = new RTCPeerConnection();
+
+                // Add local stream tracks to the peer connection
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                // Handle incoming tracks and display remote video
+                peerConnection.ontrack = event => {
+                    remoteVideo.srcObject = event.streams[0];
+                };
+
+                // Handle ICE candidate events by sending them to other clients in the same room
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', event.candidate);
+                    }
+                };
+
+                // Create an offer to start the call
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                // Send the offer to other clients in the same room
+                socket.emit('offer', offer);
+
+            } catch (error) {
+                console.error('Error starting call:', error);
+            }
+        }
+
+        // Function to handle incoming offer from other clients
+        socket.on('offer', async (offer, senderClientId) => {
+            try {
+                // Create a new peer connection
+                peerConnection = new RTCPeerConnection();
+
+                // Add local stream tracks to the peer connection
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                // Set remote description from the offer
+                await peerConnection.setRemoteDescription(offer);
+
+                // Create an answer to start the call
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                // Send the answer back to the sender client
+                socket.emit('answer', answer, senderClientId);
+
+                // Handle incoming ICE candidates from other clients
+                socket.on('ice-candidate', async candidate => {
+                    await peerConnection.addIceCandidate(candidate);
+                });
+
+            } catch (error) {
+                console.error('Error accepting call:', error);
+            }
+        });
+    </script>
+</body>
+</html>
